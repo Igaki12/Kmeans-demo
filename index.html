@@ -10,7 +10,9 @@
   #controls label { margin: 0 8px; }
   #chart { border: 1px solid #ccc; cursor: pointer; }
   .node { fill: #999; stroke: #fff; stroke-width: 1px; }
-  .centroid { fill: none; stroke: #000; stroke-width: 2px; pointer-events: none; }
+  .centroid { stroke-width: 2px; pointer-events: none; }
+  .centroid-filled { stroke-width: 2px; pointer-events: none; }
+  .centroid-trail { stroke-width: 1px; pointer-events: none; opacity: 0.5; }
 </style>
 </head>
 <body>
@@ -20,7 +22,7 @@
     <input type="number" id="nInput" value="100" min="10" max="1000" />
   </label>
   <label>K (クラスター数):
-    <input type="number" id="kInput" value="5" min="1" max="10" />
+    <input type="number" id="kInput" value="3" min="1" max="10" />
   </label>
   <button id="btnStep">ステップ</button>
   <button id="btnReset">最初から</button>
@@ -37,6 +39,7 @@
   const color = d3.schemeTableau10;
 
   let nodes = [], centroids = [], initCentroids = [], iter = 0;
+  let centroidHistory = []; // セントロイドの軌跡を保存
 
   // ユーティリティ
   const rand = (min, max) => Math.random() * (max - min) + min;
@@ -44,6 +47,7 @@
 
   function init(newData = true) {
     iter = 0;
+    centroidHistory = []; // 軌跡をリセット
     d3.select("#iterLabel").text("");
     const N = +document.getElementById("nInput").value;
     const K = +document.getElementById("kInput").value;
@@ -54,6 +58,9 @@
 
     centroids = d3.range(K).map(() => ({ x: rand(r, w - r), y: rand(r, h - r) }));
     initCentroids = centroids.map(c => ({ x: c.x, y: c.y })); // 深いコピー
+    
+    // 初期位置を履歴に追加
+    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
 
     draw();
   }
@@ -86,9 +93,17 @@
 
   function step() {
     assign();
+    
+    // セントロイド更新前の位置を保存
+    const prevCentroids = centroids.map(c => ({ x: c.x, y: c.y }));
+    
     update();
     iter++;
     d3.select("#iterLabel").text(`Iteration: ${iter}`);
+    
+    // 新しい位置を履歴に追加
+    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
+    
     draw();
   }
 
@@ -102,11 +117,56 @@
       .attr("cy", d => d.y)
       .attr("fill", d => d.cluster === -1 ? "#999" : color[d.cluster % color.length]);
 
-    // セントロイド
+    // セントロイドの軌跡線を描画
+    if (centroidHistory.length > 1) {
+      const trails = [];
+      for (let i = 0; i < centroids.length; i++) {
+        const path = centroidHistory.map(step => ({ x: step[i].x, y: step[i].y }));
+        trails.push({ path, index: i });
+      }
+      
+      const trailLines = svg.selectAll("path.centroid-trail").data(trails);
+      trailLines.join("path")
+        .attr("class", "centroid-trail")
+        .attr("fill", "none")
+        .attr("stroke", d => color[d.index % color.length])
+        .attr("d", d => {
+          if (d.path.length < 2) return "";
+          return d3.line()
+            .x(p => p.x)
+            .y(p => p.y)(d.path);
+        });
+    }
+
+    // セントロイドの残像（過去の位置）
+    if (centroidHistory.length > 1) {
+      const pastCentroids = centroidHistory.slice(0, -1).flatMap((step, historyIndex) =>
+        step.map((pos, centroidIndex) => ({
+          x: pos.x,
+          y: pos.y,
+          index: centroidIndex,
+          opacity: 0.3 * (historyIndex + 1) / centroidHistory.length
+        }))
+      );
+      
+      const pastXs = svg.selectAll("path.centroid-past").data(pastCentroids);
+      pastXs.join("path")
+        .attr("class", "centroid-past")
+        .attr("fill", d => d.index < 5 ? color[d.index % color.length] : "none")
+        .attr("stroke", d => color[d.index % color.length])
+        .attr("stroke-width", 1)
+        .attr("opacity", d => d.opacity)
+        .attr("d", d3.symbol().type(d3.symbolCross).size(100))
+        .attr("transform", d => `translate(${d.x},${d.y})`);
+    }
+
+    // 現在のセントロイド
     const xs = svg.selectAll("path.centroid").data(centroids);
     xs.join("path")
       .attr("class", "centroid")
+      .attr("fill", (d, i) => i < 5 ? color[i % color.length] : "none")
       .attr("stroke", (d, i) => color[i % color.length])
+      .attr("stroke-width", 3)
       .attr("d", d3.symbol().type(d3.symbolCross).size(200))
       .attr("transform", d => `translate(${d.x},${d.y})`);
   }
@@ -117,7 +177,11 @@
     centroids = initCentroids.map(c => ({ ...c }));
     nodes.forEach(n => n.cluster = -1);
     iter = 0;
+    centroidHistory = [centroids.map(c => ({ x: c.x, y: c.y }))]; // 初期位置のみに戻す
     d3.select("#iterLabel").text("");
+    // 軌跡と残像をクリア
+    svg.selectAll("path.centroid-trail").remove();
+    svg.selectAll("path.centroid-past").remove();
     draw();
   };
   document.getElementById("btnNew").onclick = () => init(true);
