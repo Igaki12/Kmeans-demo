@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K-means クラスタリング デモ</title>
+<style>
+  body{margin:0;display:flex;flex-direction:column;align-items:center;font-family:sans-serif}
+  canvas{border:1px solid #ccc;margin-top:1rem}
+  button{margin:0.5rem;padding:0.4rem 1rem;font-size:1rem;cursor:pointer}
+</style>
+</head>
+<body>
+  <h1>K-means クラスタリング デモ</h1>
+  <p>100 点を <strong>K=3</strong> でクラスタリングします。<br>
+     <em>Step</em> で 1 イテレーション、<em>Reset</em> で初期化します。</p>
+
+  <canvas id="plot" width="500" height="500"></canvas>
+  <div>
+    <button id="stepBtn">Step</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+
+  <script>
+    /* --- パラメータ --- */
+    const K = 3;           // クラスター数
+    const POINTS = 100;    // 点の個数
+    const COLORS = ['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6'];
+
+    /* --- 初期化 --- */
+    const canvas = document.getElementById('plot');
+    const ctx = canvas.getContext('2d');
+    let points, centroids, labels;
+
+    const rand = (min, max) => Math.random() * (max - min) + min;
+
+    function init() {
+      points = Array.from({length: POINTS}, () => ({
+        x: rand(0, canvas.width),
+        y: rand(0, canvas.height)
+      }));
+      centroids = Array.from({length: K}, () => ({
+        x: rand(0, canvas.width),
+        y: rand(0, canvas.height)
+      }));
+      labels = new Array(POINTS).fill(-1); // まだ未割り当て
+      draw();
+    }
+
+    /* --- ユーティリティ --- */
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+    /* --- 1 イテレーション --- */
+    function step() {
+      // 1) 割り当て
+      for (let i = 0; i < POINTS; i++) {
+        let best = 0, bestDist = Infinity;
+        for (let k = 0; k < K; k++) {
+          const d = dist(points[i], centroids[k]);
+          if (d < bestDist) { bestDist = d; best = k; }
+        }
+        labels[i] = best;
+      }
+
+      // 2) 重心更新
+      for (let k = 0; k < K; k++) {
+        let sumX = 0, sumY = 0, count = 0;
+        for (let i = 0; i < POINTS; i++) {
+          if (labels[i] === k) {
+            sumX += points[i].x;
+            sumY += points[i].y;
+            count++;
+          }
+        }
+        if (count) {
+          centroids[k].x = sumX / count;
+          centroids[k].y = sumY / count;
+        }
+      }
+
+      draw();
+    }
+
+    /* --- 描画 --- */
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 点
+      for (let i = 0; i < POINTS; i++) {
+        ctx.fillStyle = COLORS[(labels[i] + COLORS.length) % COLORS.length];
+        ctx.beginPath();
+        ctx.arc(points[i].x, points[i].y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 重心
+      ctx.fillStyle = '#000';
+      for (let k = 0; k < K; k++) {
+        ctx.beginPath();
+        ctx.rect(centroids[k].x - 6, centroids[k].y - 6, 12, 12);
+        ctx.fill();
+      }
+    }
+
+    /* --- ボタンイベント --- */
+    document.getElementById('stepBtn').addEventListener('click', step);
+    document.getElementById('resetBtn').addEventListener('click', init);
+
+    /* --- 起動 --- */
+    init();
+  </script>
+</body>
+</html>
