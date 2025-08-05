@@ -1,194 +1,211 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<title>K-means 可視化シミュレーター</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>K-Means クラスタリング・シミュレーター</title>
 <style>
-  body { font-family: sans-serif; text-align: center; margin: 0; padding: 0; }
-  #controls { padding: 12px; background: #fafafa; box-shadow: 0 0 4px #ccc; }
-  #controls label { margin: 0 8px; }
-  #chart { border: 1px solid #ccc; cursor: pointer; }
-  .node { fill: #999; stroke: #fff; stroke-width: 1px; }
-  .centroid { stroke-width: 2px; pointer-events: none; }
-  .centroid-filled { stroke-width: 2px; pointer-events: none; }
-  .centroid-trail { stroke-width: 1px; pointer-events: none; opacity: 0.5; }
+  :root {
+    --canvas-size: 600px;
+  }
+  body {
+    font-family: system-ui, "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0;
+    padding: 1rem;
+    background: #fafafa;
+  }
+  h1 { margin: 0 0 0.5rem; font-size: 1.4rem; }
+  #controls {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.8rem;
+  }
+  #controls label { font-size: 0.9rem; }
+  #controls input[type="number"] {
+    width: 5rem;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.9rem;
+  }
+  button {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.9rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    background: #1976d2;
+    color: #fff;
+  }
+  button:disabled { background: #90caf9; cursor: not-allowed; }
+  canvas {
+    border: 1px solid #b0bec5;
+    width: var(--canvas-size);
+    height: var(--canvas-size);
+    max-width: 100%;
+    touch-action: manipulation;
+    background: #ffffff;
+  }
+  /* 小さな表示用の説明 */
+  #note { font-size: 0.8rem; color: #555; margin-top: 0.6rem; }
 </style>
 </head>
 <body>
-
-<div id="controls">
-  <label>N (ノード数):
-    <input type="number" id="nInput" value="100" min="10" max="1000" />
-  </label>
-  <label>K (クラスター数):
-    <input type="number" id="kInput" value="3" min="1" max="10" />
-  </label>
-  <button id="btnStep">ステップ</button>
-  <button id="btnReset">最初から</button>
-  <button id="btnNew">新規作成</button>
-  <span id="iterLabel"></span>
-</div>
-
-<svg id="chart" width="600" height="600"></svg>
+  <h1>K-Means クラスタリング・シミュレーター</h1>
+  <div id="controls">
+    <label>N (ノード数): <input type="number" id="numPoints" value="100" min="10" max="1000" step="10" /></label>
+    <label>K (クラスタ数): <input type="number" id="numClusters" value="5" min="2" max="10" step="1" /></label>
+    <button id="initBtn">新規作成</button>
+    <button id="stepBtn">ステップ</button>
+    <button id="resetBtn">最初から</button>
+  </div>
+  <canvas id="canvas" width="600" height="600"></canvas>
+  <div id="note">図をクリックするか[ステップ]ボタンを押すと1ステップずつ処理を行います</div>
 
 <script>
 (() => {
-  const w = 600, h = 600, r = 5;
-  const svg = d3.select("#chart");
-  const color = d3.schemeTableau10;
+  "use strict";
 
-  let nodes = [], centroids = [], initCentroids = [], iter = 0;
-  let centroidHistory = []; // セントロイドの軌跡を保存
+  // --- 設定値とグローバル変数 -------------------------------------
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const COLORS = [
+    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", // 塗りつぶし
+    "#f44336", "#2196f3", "#4caf50", "#9c27b0", "#ff9800"  // 枠線
+  ];
 
-  // ユーティリティ
-  const rand = (min, max) => Math.random() * (max - min) + min;
-  const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  let points = [];      // [{x,y,cluster}]
+  let clusters = [];    // [{x,y,color,outlined,history:[{x,y}]}]
+  let stepCount = 0;
 
-  function init(newData = true) {
-    iter = 0;
-    centroidHistory = []; // 軌跡をリセット
-    d3.select("#iterLabel").text("");
-    const N = +document.getElementById("nInput").value;
-    const K = +document.getElementById("kInput").value;
+  // --- ユーティリティ ---------------------------------------------
+  function rand(max) { return Math.random() * max; }
+  function distance(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+  function drawCircle(x, y, r, fill, stroke, lineWidth = 1) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lineWidth; ctx.stroke(); }
+  }
+  function drawCross(x, y, size, color, alpha = 1) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x - size, y - size);
+    ctx.lineTo(x + size, y + size);
+    ctx.moveTo(x - size, y + size);
+    ctx.lineTo(x + size, y - size);
+    ctx.stroke();
+    ctx.restore();
+  }
 
-    if (newData) {
-      nodes = d3.range(N).map(() => ({ x: rand(r, w - r), y: rand(r, h - r), cluster: -1 }));
-    }
+  // --- 初期化 -----------------------------------------------------
+  function createSimulation() {
+    const N = Number(document.getElementById("numPoints").value);
+    const K = Number(document.getElementById("numClusters").value);
 
-    centroids = d3.range(K).map(() => ({ x: rand(r, w - r), y: rand(r, h - r) }));
-    initCentroids = centroids.map(c => ({ x: c.x, y: c.y })); // 深いコピー
-    
-    // 初期位置を履歴に追加
-    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
+    // ノード生成
+    points = Array.from({ length: N }, () => ({ x: rand(canvas.width), y: rand(canvas.height), cluster: -1 }));
 
+    // クラスタ生成
+    clusters = Array.from({ length: K }, (_, i) => ({
+      x: rand(canvas.width),
+      y: rand(canvas.height),
+      color: COLORS[i % COLORS.length],
+      outlined: i >= 5, // 6番目以降は枠線のみ
+      history: []
+    }));
+
+    stepCount = 0;
     draw();
   }
 
-  function assign() {
-    nodes.forEach(n => {
-      let min = Infinity, idx = -1;
-      centroids.forEach((c, i) => {
-        const d = dist2(n, c);
-        if (d < min) { min = d; idx = i; }
-      });
-      n.cluster = idx;
-    });
-  }
-
-  function update() {
-    const K = centroids.length;
-    const sums = Array.from({ length: K }, () => ({ x: 0, y: 0, cnt: 0 }));
-    nodes.forEach(n => {
-      const s = sums[n.cluster];
-      s.x += n.x; s.y += n.y; s.cnt++;
-    });
-    centroids.forEach((c, i) => {
-      if (sums[i].cnt) {
-        c.x = sums[i].x / sums[i].cnt;
-        c.y = sums[i].y / sums[i].cnt;
-      }
-    });
-  }
-
+  // --- アルゴリズムの1ステップ -----------------------------------
   function step() {
-    assign();
-    
-    // セントロイド更新前の位置を保存
-    const prevCentroids = centroids.map(c => ({ x: c.x, y: c.y }));
-    
-    update();
-    iter++;
-    d3.select("#iterLabel").text(`Iteration: ${iter}`);
-    
-    // 新しい位置を履歴に追加
-    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
-    
-    draw();
-  }
+    if (!clusters.length) return;
+    // Assignment: 最近傍クラスタに割り当て
+    points.forEach(p => {
+      let minD = Infinity, idx = -1;
+      clusters.forEach((c, i) => {
+        const d = distance(p.x, p.y, c.x, c.y);
+        if (d < minD) { minD = d; idx = i; }
+      });
+      p.cluster = idx;
+    });
 
-  function draw() {
-    // ノード
-    const circles = svg.selectAll("circle").data(nodes);
-    circles.join("circle")
-      .attr("class", "node")
-      .attr("r", r)
-      .attr("cx", d => d.x)
-      .attr("cy", d => d.y)
-      .attr("fill", d => d.cluster === -1 ? "#999" : color[d.cluster % color.length]);
-
-    // セントロイドの軌跡線を描画
-    if (centroidHistory.length > 1) {
-      const trails = [];
-      for (let i = 0; i < centroids.length; i++) {
-        const path = centroidHistory.map(step => ({ x: step[i].x, y: step[i].y }));
-        trails.push({ path, index: i });
+    // Update: 各クラスタを重心へ移動
+    clusters.forEach((c, i) => {
+      const members = points.filter(p => p.cluster === i);
+      if (members.length) {
+        c.history.push({ x: c.x, y: c.y });
+        c.x = members.reduce((sum, p) => sum + p.x, 0) / members.length;
+        c.y = members.reduce((sum, p) => sum + p.y, 0) / members.length;
       }
-      
-      const trailLines = svg.selectAll("path.centroid-trail").data(trails);
-      trailLines.join("path")
-        .attr("class", "centroid-trail")
-        .attr("fill", "none")
-        .attr("stroke", d => color[d.index % color.length])
-        .attr("d", d => {
-          if (d.path.length < 2) return "";
-          return d3.line()
-            .x(p => p.x)
-            .y(p => p.y)(d.path);
-        });
-    }
+    });
 
-    // セントロイドの残像（過去の位置）
-    if (centroidHistory.length > 1) {
-      const pastCentroids = centroidHistory.slice(0, -1).flatMap((step, historyIndex) =>
-        step.map((pos, centroidIndex) => ({
-          x: pos.x,
-          y: pos.y,
-          index: centroidIndex,
-          opacity: 0.3 * (historyIndex + 1) / centroidHistory.length
-        }))
-      );
-      
-      const pastXs = svg.selectAll("path.centroid-past").data(pastCentroids);
-      pastXs.join("path")
-        .attr("class", "centroid-past")
-        .attr("fill", d => d.index < 5 ? color[d.index % color.length] : "none")
-        .attr("stroke", d => color[d.index % color.length])
-        .attr("stroke-width", 1)
-        .attr("opacity", d => d.opacity)
-        .attr("d", d3.symbol().type(d3.symbolCross).size(100))
-        .attr("transform", d => `translate(${d.x},${d.y})`);
-    }
-
-    // 現在のセントロイド
-    const xs = svg.selectAll("path.centroid").data(centroids);
-    xs.join("path")
-      .attr("class", "centroid")
-      .attr("fill", (d, i) => i < 5 ? color[i % color.length] : "none")
-      .attr("stroke", (d, i) => color[i % color.length])
-      .attr("stroke-width", 3)
-      .attr("d", d3.symbol().type(d3.symbolCross).size(200))
-      .attr("transform", d => `translate(${d.x},${d.y})`);
+    stepCount++;
+    draw();
   }
 
-  // イベント
-  document.getElementById("btnStep").onclick = step;
-  document.getElementById("btnReset").onclick = () => {
-    centroids = initCentroids.map(c => ({ ...c }));
-    nodes.forEach(n => n.cluster = -1);
-    iter = 0;
-    centroidHistory = [centroids.map(c => ({ x: c.x, y: c.y }))]; // 初期位置のみに戻す
-    d3.select("#iterLabel").text("");
-    // 軌跡と残像をクリア
-    svg.selectAll("path.centroid-trail").remove();
-    svg.selectAll("path.centroid-past").remove();
-    draw();
-  };
-  document.getElementById("btnNew").onclick = () => init(true);
-  svg.on("click", step);
+  // --- 描画 -------------------------------------------------------
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 初期化
-  init(true);
+    // ノードと線を描画
+    points.forEach(p => {
+      if (p.cluster !== -1) {
+        const c = clusters[p.cluster];
+        // ノードからクラスタまでの線
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(c.x, c.y);
+        ctx.strokeStyle = c.color;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    });
+
+    // ノード (後ろに線を引いているので後ほど塗ると見栄えが良い)
+    points.forEach(p => {
+      const r = 4;
+      if (p.cluster === -1) {
+        drawCircle(p.x, p.y, r, "#9e9e9e", "#bdbdbd");
+      } else {
+        const c = clusters[p.cluster];
+        if (!c.outlined) {
+          drawCircle(p.x, p.y, r, c.color, null);
+        } else {
+          drawCircle(p.x, p.y, r, "#ffffff", c.color, 1.5);
+        }
+      }
+    });
+
+    // クラスタの残像
+    clusters.forEach(c => {
+      c.history.forEach(pos => drawCross(pos.x, pos.y, 6, c.color, 0.2));
+    });
+
+    // 現在のクラスタ (×印)
+    clusters.forEach(c => drawCross(c.x, c.y, 8, c.color));
+
+    // ステップ数表示
+    ctx.fillStyle = "#424242";
+    ctx.font = "14px sans-serif";
+    ctx.fillText(`ステップ: ${stepCount}`, 8, canvas.height - 8);
+  }
+
+  // --- ボタン / イベント ----------------------------------------
+  document.getElementById("initBtn").addEventListener("click", createSimulation);
+  document.getElementById("stepBtn").addEventListener("click", step);
+  document.getElementById("resetBtn").addEventListener("click", () => { stepCount = 0; draw(); });
+  canvas.addEventListener("click", step);
+
+  // 初期表示
+  createSimulation();
 })();
 </script>
 </body>

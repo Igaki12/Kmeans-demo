@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>K-means 可視化シミュレーター</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  body { font-family: sans-serif; text-align: center; margin: 0; padding: 0; }
+  #controls { padding: 12px; background: #fafafa; box-shadow: 0 0 4px #ccc; }
+  #controls label { margin: 0 8px; }
+  #chart { border: 1px solid #ccc; cursor: pointer; }
+  .node { fill: #999; stroke: #fff; stroke-width: 1px; }
+  .centroid { stroke-width: 2px; pointer-events: none; }
+  .centroid-filled { stroke-width: 2px; pointer-events: none; }
+  .centroid-trail { stroke-width: 1px; pointer-events: none; opacity: 0.5; }
+  .cluster-connection { stroke-width: 0.5; opacity: 0.3; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <label>N (ノード数):
+    <input type="number" id="nInput" value="100" min="10" max="1000" />
+  </label>
+  <label>K (クラスター数):
+    <input type="number" id="kInput" value="3" min="1" max="10" />
+  </label>
+  <button id="btnCluster">クラスター表示</button>
+  <button id="btnStep">ステップ</button>
+  <button id="btnReset">最初から</button>
+  <button id="btnNew">新規作成</button>
+  <span id="iterLabel"></span>
+</div>
+
+<svg id="chart" width="600" height="600"></svg>
+
+<script>
+(() => {
+  const w = 600, h = 600, r = 5;
+  const svg = d3.select("#chart");
+  const color = d3.schemeTableau10;
+
+  let nodes = [], centroids = [], initCentroids = [], iter = 0;
+  let centroidHistory = []; // セントロイドの軌跡を保存
+  let showClusters = false; // クラスター表示フラグ
+
+  // ユーティリティ
+  const rand = (min, max) => Math.random() * (max - min) + min;
+  const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+
+  function init(newData = true) {
+    iter = 0;
+    centroidHistory = []; // 軌跡をリセット
+    d3.select("#iterLabel").text("");
+    const N = +document.getElementById("nInput").value;
+    const K = +document.getElementById("kInput").value;
+
+    if (newData) {
+      nodes = d3.range(N).map(() => ({ x: rand(r, w - r), y: rand(r, h - r), cluster: -1 }));
+    }
+
+    centroids = d3.range(K).map(() => ({ x: rand(r, w - r), y: rand(r, h - r) }));
+    initCentroids = centroids.map(c => ({ x: c.x, y: c.y })); // 深いコピー
+    
+    // 初期位置を履歴に追加
+    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
+
+    draw();
+  }
+
+  function assign() {
+    nodes.forEach(n => {
+      let min = Infinity, idx = -1;
+      centroids.forEach((c, i) => {
+        const d = dist2(n, c);
+        if (d < min) { min = d; idx = i; }
+      });
+      n.cluster = idx;
+    });
+  }
+
+  function update() {
+    const K = centroids.length;
+    const sums = Array.from({ length: K }, () => ({ x: 0, y: 0, cnt: 0 }));
+    nodes.forEach(n => {
+      const s = sums[n.cluster];
+      s.x += n.x; s.y += n.y; s.cnt++;
+    });
+    centroids.forEach((c, i) => {
+      if (sums[i].cnt) {
+        c.x = sums[i].x / sums[i].cnt;
+        c.y = sums[i].y / sums[i].cnt;
+      }
+    });
+  }
+
+  function step() {
+    assign();
+    
+    // セントロイド更新前の位置を保存
+    const prevCentroids = centroids.map(c => ({ x: c.x, y: c.y }));
+    
+    update();
+    iter++;
+    d3.select("#iterLabel").text(`Iteration: ${iter}`);
+    
+    // 新しい位置を履歴に追加
+    centroidHistory.push(centroids.map(c => ({ x: c.x, y: c.y })));
+    
+    draw();
+  }
+
+  function showClusterConnections() {
+    showClusters = !showClusters;
+    document.getElementById("btnCluster").textContent = showClusters ? "表示OFF" : "クラスター表示";
+    draw();
+  }
+
+  function draw() {
+    // クラスター接続線を描画
+    if (showClusters) {
+      const connections = nodes.filter(n => n.cluster !== -1).map(n => ({
+        node: n,
+        centroid: centroids[n.cluster]
+      }));
+      
+      const lines = svg.selectAll("line.cluster-connection").data(connections);
+      lines.join("line")
+        .attr("class", "cluster-connection")
+        .attr("x1", d => d.node.x)
+        .attr("y1", d => d.node.y)
+        .attr("x2", d => d.centroid.x)
+        .attr("y2", d => d.centroid.y)
+        .attr("stroke", d => color[d.node.cluster % color.length])
+        .attr("stroke-width", 0.5)
+        .attr("opacity", 0.3);
+    } else {
+      svg.selectAll("line.cluster-connection").remove();
+    }
+
+    // ノード
+    const circles = svg.selectAll("circle").data(nodes);
+    circles.join("circle")
+      .attr("class", "node")
+      .attr("r", r)
+      .attr("cx", d => d.x)
+      .attr("cy", d => d.y)
+      .attr("fill", d => {
+        if (showClusters && d.cluster !== -1) {
+          return color[d.cluster % color.length];
+        }
+        return d.cluster === -1 ? "#999" : color[d.cluster % color.length];
+      })
+      .attr("stroke", "#fff")
+      .attr("stroke-width", showClusters ? 2 : 1);
+
+    // セントロイドの軌跡線を描画
+    if (centroidHistory.length > 1) {
+      const trails = [];
+      for (let i = 0; i < centroids.length; i++) {
+        const path = centroidHistory.map(step => ({ x: step[i].x, y: step[i].y }));
+        trails.push({ path, index: i });
+      }
+      
+      const trailLines = svg.selectAll("path.centroid-trail").data(trails);
+      trailLines.join("path")
+        .attr("class", "centroid-trail")
+        .attr("fill", "none")
+        .attr("stroke", d => color[d.index % color.length])
+        .attr("d", d => {
+          if (d.path.length < 2) return "";
+          return d3.line()
+            .x(p => p.x)
+            .y(p => p.y)(d.path);
+        });
+    }
+
+    // セントロイドの残像（過去の位置）
+    if (centroidHistory.length > 1) {
+      const pastCentroids = centroidHistory.slice(0, -1).flatMap((step, historyIndex) =>
+        step.map((pos, centroidIndex) => ({
+          x: pos.x,
+          y: pos.y,
+          index: centroidIndex,
+          opacity: 0.3 * (historyIndex + 1) / centroidHistory.length
+        }))
+      );
+      
+      const pastXs = svg.selectAll("path.centroid-past").data(pastCentroids);
+      pastXs.join("path")
+        .attr("class", "centroid-past")
+        .attr("fill", d => d.index < 5 ? color[d.index % color.length] : "none")
+        .attr("stroke", d => color[d.index % color.length])
+        .attr("stroke-width", 1)
+        .attr("opacity", d => d.opacity)
+        .attr("d", d3.symbol().type(d3.symbolCross).size(100))
+        .attr("transform", d => `translate(${d.x},${d.y})`);
+    }
+
+    // 現在のセントロイド
+    const xs = svg.selectAll("path.centroid").data(centroids);
+    xs.join("path")
+      .attr("class", "centroid")
+      .attr("fill", (d, i) => i < 5 ? color[i % color.length] : "none")
+      .attr("stroke", (d, i) => color[i % color.length])
+      .attr("stroke-width", 3)
+      .attr("d", d3.symbol().type(d3.symbolCross).size(200))
+      .attr("transform", d => `translate(${d.x},${d.y})`);
+  }
+
+  // イベント
+  document.getElementById("btnCluster").onclick = showClusterConnections;
+  document.getElementById("btnStep").onclick = step;
+  document.getElementById("btnReset").onclick = () => {
+    centroids = initCentroids.map(c => ({ ...c }));
+    nodes.forEach(n => n.cluster = -1);
+    iter = 0;
+    centroidHistory = [centroids.map(c => ({ x: c.x, y: c.y }))]; // 初期位置のみに戻す
+    d3.select("#iterLabel").text("");
+    // 軌跡と残像をクリア
+    svg.selectAll("path.centroid-trail").remove();
+    svg.selectAll("path.centroid-past").remove();
+    svg.selectAll("line.cluster-connection").remove();
+    showClusters = false;
+    document.getElementById("btnCluster").textContent = "クラスター表示";
+    draw();
+  };
+  document.getElementById("btnNew").onclick = () => init(true);
+  svg.on("click", step);
+
+  // 初期化
+  init(true);
+})();
+</script>
+</body>
+</html>
